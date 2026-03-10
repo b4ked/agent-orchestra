@@ -174,29 +174,34 @@ async function handleSpawn(ws, payload) {
     return;
   }
 
-  // --- Determine command & args -----------------------------------------
-  // Resolve to absolute path so node-pty's posix_spawnp always finds it.
+  // --- Build agent command string ----------------------------------------
+  // We spawn the user's login shell, then type the agent command into it.
+  // This is how real terminal emulators work and avoids node-pty's
+  // posix_spawnp quirks with Node.js CLI wrappers and symlinks on macOS.
   const baseName = engine === 'claude' ? 'claude' : 'codex';
-  const command = resolveCmd(baseName);
-  const args = engine === 'claude' ? ['--dangerously-skip-permissions'] : ['-yolo'];
+  const resolvedCmd = resolveCmd(baseName);
+  const agentFlags = engine === 'claude' ? '--dangerously-skip-permissions' : '-yolo';
+  const agentInvocation = `${resolvedCmd} ${agentFlags}`;
 
-  // --- Spawn pty ----------------------------------------------------------
+  // Use the user's $SHELL (login shell) so PATH and env are fully initialised
+  const shell = process.env.SHELL || '/bin/zsh';
+  const shellArgs = ['-l']; // login shell → sources .zprofile / .bash_profile
+
+  // --- Spawn pty (shell) --------------------------------------------------
   let ptyProc;
   try {
-    ptyProc = pty.spawn(command, args, {
+    ptyProc = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols: 220,
       rows: 50,
-      // Launch from CWD of the server process so relative paths work
       cwd: process.cwd(),
       env: { ...process.env, TERM: 'xterm-256color' },
     });
   } catch (err) {
-    console.error(`[agent] spawn failed  id=${agentId}  cmd=${command}:`, err.message);
-    console.error(`[agent] PATH=${process.env.PATH}`);
+    console.error(`[agent] shell spawn failed  id=${agentId}  shell=${shell}:`, err.message);
     sendToClient(ws, {
       type: 'error',
-      payload: { agentId, message: `Failed to spawn "${command}": ${err.message}` },
+      payload: { agentId, message: `Failed to spawn shell "${shell}": ${err.message}` },
     });
     await safeUnlink(contextPath);
     return;
@@ -206,9 +211,9 @@ async function handleSpawn(ws, payload) {
 
   // Notify client the agent is alive
   sendToClient(ws, { type: 'agent_created', payload: { agentId, engine } });
-  console.log(`[agent] spawned  id=${agentId}  engine=${engine}  pid=${ptyProc.pid}`);
+  console.log(`[agent] spawned  id=${agentId}  engine=${engine}  shell=${shell}  pid=${ptyProc.pid}`);
 
-  // --- Pipe pty output → client -----------------------------------------
+  // --- Pipe pty output → client ------------------------------------------
   ptyProc.onData((data) => {
     sendToClient(ws, { type: 'output', payload: { agentId, data } });
   });
@@ -219,17 +224,32 @@ async function handleSpawn(ws, payload) {
     cleanupAgent(agentId);
   });
 
-  // --- Feed initial context after CLI boot delay -------------------------
-  // 1 500 ms gives the CLI tool time to reach its interactive prompt.
+  // --- Staged startup sequence -------------------------------------------
+  // 1. Wait for shell prompt (~600 ms), then run the agent CLI.
+  // 2. Wait for agent CLI to reach its interactive prompt (~2 s), then
+  //    send the compiled context as the first user message.
   setTimeout(() => {
     const agent = agents.get(agentId);
-    if (!agent) return; // already killed
+    if (!agent) return;
+    console.log(`[agent] launching CLI  id=${agentId}  cmd=${agentInvocation}`);
     try {
-      agent.ptyProc.write(contextContent + '\r');
+      agent.ptyProc.write(agentInvocation + '\r');
     } catch (err) {
-      console.error(`[agent] failed to write initial context  id=${agentId}:`, err.message);
+      console.error(`[agent] failed to send CLI command  id=${agentId}:`, err.message);
+      return;
     }
-  }, 1500);
+
+    // Send context once the CLI is interactive
+    setTimeout(() => {
+      const a = agents.get(agentId);
+      if (!a) return;
+      try {
+        a.ptyProc.write(contextContent + '\r');
+      } catch (err) {
+        console.error(`[agent] failed to write context  id=${agentId}:`, err.message);
+      }
+    }, 2000);
+  }, 600);
 }
 
 function handleInput({ agentId, data }) {
