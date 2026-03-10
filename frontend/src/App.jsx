@@ -101,10 +101,14 @@ export default function App() {
         const { agentId, message } = msg.payload;
         console.error(`[server error] agent=${agentId}  msg=${message}`);
         if (agentId) {
-          setAgents((prev) => {
-            if (!prev[agentId]) return prev;
-            return { ...prev, [agentId]: { ...prev[agentId], status: 'error', errorMsg: message } };
-          });
+          // Create a stub entry if the agent never reached 'agent_created'
+          // (e.g. spawn failed before the pty was alive)
+          setAgents((prev) => ({
+            ...prev,
+            [agentId]: prev[agentId]
+              ? { ...prev[agentId], status: 'error', errorMsg: message }
+              : { agentId, engine: 'unknown', status: 'error', errorMsg: message },
+          }));
         }
         break;
       }

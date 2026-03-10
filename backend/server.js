@@ -177,9 +177,11 @@ async function handleSpawn(ws, payload) {
       env: { ...process.env, TERM: 'xterm-256color' },
     });
   } catch (err) {
+    console.error(`[agent] spawn failed  id=${agentId}  cmd=${command}:`, err.message);
+    console.error(`[agent] PATH=${process.env.PATH}`);
     sendToClient(ws, {
       type: 'error',
-      payload: { agentId, message: `Failed to spawn ${command}: ${err.message}` },
+      payload: { agentId, message: `Failed to spawn "${command}": ${err.message}` },
     });
     await safeUnlink(contextPath);
     return;
