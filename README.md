@@ -38,6 +38,12 @@ Spawn, monitor, and terminate **Claude Code** and **OpenAI Codex** instances fro
 - **Linux** – `build-essential` (Debian/Ubuntu) or equivalent
 - **Windows** – run from a PowerShell/cmd with Visual Studio Build Tools
 
+> **macOS / Node 20+ gotcha:** `npm install` sometimes silently skips the native build.
+> If you see `posix_spawnp failed` when launching an agent, run this once to compile the addon:
+> ```bash
+> cd backend/node_modules/node-pty && npx node-gyp rebuild
+> ```
+
 ---
 
 ## Quick Start
