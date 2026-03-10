@@ -28,11 +28,30 @@ import { WebSocketServer } from 'ws';
 import * as pty from 'node-pty';
 import { randomUUID } from 'crypto';
 import { writeFile, unlink } from 'fs/promises';
+import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ---------------------------------------------------------------------------
+// Resolve absolute path for a CLI command so node-pty can find it regardless
+// of how its internal PATH resolution differs from the shell's.
+// ---------------------------------------------------------------------------
+function resolveCmd(name) {
+  try {
+    const resolved = execFileSync('which', [name], {
+      encoding: 'utf-8',
+      env: process.env,
+    }).trim();
+    console.log(`[cmd] resolved "${name}" → ${resolved}`);
+    return resolved;
+  } catch {
+    console.warn(`[cmd] "which ${name}" failed – falling back to bare name`);
+    return name;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket servers
@@ -156,14 +175,10 @@ async function handleSpawn(ws, payload) {
   }
 
   // --- Determine command & args -----------------------------------------
-  let command, args;
-  if (engine === 'claude') {
-    command = 'claude';
-    args = ['--dangerously-skip-permissions'];
-  } else {
-    command = 'codex';
-    args = ['-yolo'];
-  }
+  // Resolve to absolute path so node-pty's posix_spawnp always finds it.
+  const baseName = engine === 'claude' ? 'claude' : 'codex';
+  const command = resolveCmd(baseName);
+  const args = engine === 'claude' ? ['--dangerously-skip-permissions'] : ['-yolo'];
 
   // --- Spawn pty ----------------------------------------------------------
   let ptyProc;
